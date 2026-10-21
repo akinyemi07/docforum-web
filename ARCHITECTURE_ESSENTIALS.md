@@ -326,6 +326,23 @@ store). Every patient API call and React Query key includes the selected
 - OpenStreetMap tiles with attribution.
 - Patient location is requested with transparent consent, kept strictly in transient memory, and NEVER persisted to storage or URLs.
 
+#### Booking + Intake Form (issue #2)
+- `POST /appointments` (body: `{ slotId, intake: IntakeFormInput, patientProfileId? }`) → `PatientAppointment`.
+- Returns `409 Conflict` if the slot has already been claimed by another user concurrent request.
+- `IntakeFormInput` shape: `{ chiefComplaint: string, symptomDuration: string, severity?: number (0-10), currentMedications: string[], allergies: string[], notes?: string }`.
+
+#### Referral Accept / Decline Screen (issue #4)
+- `GET /referrals/pending` → `PendingReferral[]`.
+- `POST /referrals/:id/accept` → `AcceptReferralResponse` (`{ referralId, createdAppointment }`). Automatically creates an appointment without requiring new intake entry.
+- `POST /referrals/:id/decline` → `{ success: boolean, referralId }`.
+- `PendingReferral` shape: `{ id, sourceConsultationId, referringDoctorName, targetSpecialty, reason, status: 'pending', createdAt, expiresAt? }`.
+
+#### Follow-up Requests (issue #31)
+- `GET /follow-up-requests/mine` → `FollowUpRequest[]`.
+- `POST /follow-up-requests/:id/book` (body: `{ slotId }`) → `PatientAppointment`.
+- Automatically carries over intake from previous consultation without asking patient to re-enter intake. Handles `409 Conflict` if the slot is taken.
+- `FollowUpRequest` shape: `{ id, doctorId, doctorName, doctorSpecialty, note, suggestedWindowStart, suggestedWindowEnd, status: 'open' | 'booked' | 'expired', sourceConsultationId, carriedOverIntake?, createdAt }`.
+
 #### Orders list and facility selection (docforum-core#11/#14, issue #5)
 - `GET /orders/mine` → `PatientOrder[]` — every version of the patient's prescriptions and lab orders, not only the current one. `PatientOrder` is a discriminated union on `orderType`:
   - prescription: `{id, patientProfileId, orderType: 'prescription', version, supersedesId, status, issuedAt, issuedByDoctorName?, requiresFacilitySelection, selectedFacility?, medication, dose, quantity?, instructions?}`
@@ -519,6 +536,24 @@ Everything else is assumed — credential storage is docforum-core#52:
   signed URLs, the PATCH (including the no-op-on-same-status semantics) and
   `GET /admin/audit-events`; fixtures seed two waiting doctors (one with zero
   documents) plus one already decided with history.
+
+### Phase W6 — Per-specialty verification review (issue #65, depends on docforum-core#51)
+
+docforum-core#51 names the two admin endpoints (`GET
+/admin/specialty-verifications?status=pending`, `PATCH
+/admin/specialty-verifications/:id`) but specifies no shapes, and hasn't
+landed. The credential attachment, the filter parameters, the envelope and
+the specialty catalog are assumed here and mirrored in `models.ts` under
+"Phase W6 — Per-specialty verification review". This is a *different* screen
+from the doctor verification queue above (issue #64): that one decides a
+doctor account, this one decides each claimed doctor↔specialty pair.
+
+- `GET /admin/specialty-verifications?status=&specialtyId=&olderThan=&cursor=` → `{items: SpecialtyClaim[], nextCursor}`, one row per doctor↔specialty pair (`DoctorSpecialty` + review fields), oldest claim first, keyset cursor like the other admin listings. `status=pending` is always sent (the queue only shows undecided claims); `specialtyId` and `olderThan` (`24h`/`72h`/`168h`, same duration syntax as docforum-core#68's `olderThan`) are optional filters and live in the URL. Grouping by doctor is done client-side — the console's promise, not the API's.
+- `SpecialtyClaim` = `{id, doctorId, doctor: {id, fullName}, specialtyId, specialty: Specialty, status: VerificationStatus, credential: {id, fileName, mimeType, sizeBytes, uploadedAt} | null, rejectionReason, reviewedById, reviewedByName, reviewedAt, createdAt, updatedAt}`. `status` is always `pending` while the claim is in the queue; approving sets it to `verified`, rejecting to `rejected`, and the claim leaves the queue.
+- `GET /admin/specialty-verifications/:id/credential` → the supporting document as a file stream (`application/pdf` and images today). Assumed: #51 doesn't mention credentials at all, but the issue requires "the relevant credential beside each claim". The console fetches it as a blob and opens it via an object URL, so the bearer token never lands in a link href. `404` for a claim with no attachment (the list row says so on screen either way).
+- `PATCH /admin/specialty-verifications/:id` (body: `{decision: 'approve' | 'reject', reason: string | null, expectedUpdatedAt}`) → the updated `SpecialtyClaim`. `reason` is **required for rejections** and shown to the doctor as what to fix or resubmit (server presumed to enforce this too — the mock does, with `422`); optional note on approval. `expectedUpdatedAt` is the claim's `updatedAt` as the admin saw it, so `409` means someone else reviewed it first. `409`/`404` close the dialog and refetch; `400`/`422` keep it open with the server's message; a network failure keeps it open and says a retry is safe (a duplicate comes back as `409`).
+- `GET /specialties` → `Specialty[]` — specialty catalog for the filter dropdown. Assumed from docforum-core#23 ("specialty catalog + `GET /doctors`"), which hasn't landed; on failure the dropdown falls back to the specialties present in the loaded claims.
+- **Out of scope by the issue's own rules:** bulk actions (each claim deserves a look). A claim with `credential: null` is still reviewable — the card calls out that approving is a judgement call and suggests asking for credentials or rejecting with what to upload.
 
 ### Scan-to-verify orders with device camera (issue #52, docforum-core#71)
 - `POST /facilities/me/verify-order` (body: `{ token: string }`) → `VerifyOrderResponse`

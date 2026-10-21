@@ -24,8 +24,10 @@ import {
   dependentKeys,
   facilityKeys,
   flagKeys,
+  followUpKeys,
   healthKeys,
   paymentKeys,
+  pendingReferralKeys,
   queueKeys,
   referralKeys,
   systemKeys,
@@ -79,6 +81,11 @@ export const invalidations = {
   ],
   /** A requested export changes the status card (and its polling cadence). */
   'account.data-export': () => [accountKeys.dataExport()],
+  /** Patient creates a booking or books a follow-up / referral. */
+  'booking.create': () => [appointmentKeys.mine(), appointmentKeys.all],
+  'referrals.accept': () => [pendingReferralKeys.all, appointmentKeys.mine()],
+  'referrals.decline': () => [pendingReferralKeys.all],
+  'followup.book': () => [followUpKeys.mine(), appointmentKeys.mine()],
 };
 
 export type InvalidationKey = keyof typeof invalidations;
